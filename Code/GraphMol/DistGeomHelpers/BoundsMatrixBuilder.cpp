@@ -241,7 +241,8 @@ inline bool squishBond(const ROMol &mol, const Bond *bond) {
 }
 
 void set12Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
-                 ComputedData &accumData) {
+                 ComputedData &accumData,
+                 const BondLengthInfo &lengthConstraints) {
   unsigned int npt = mmat->numRows();
   CHECK_INVARIANT(npt == mol.getNumAtoms(), "Wrong size metric matrix");
   CHECK_INVARIANT(accumData.bondLengths.size() >= mol.getNumBonds(),
@@ -269,9 +270,16 @@ void set12Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
     auto begId = bond->getBeginAtomIdx();
     auto endId = bond->getEndAtomIdx();
     auto bOrder = bond->getBondTypeAsDouble();
-    if (atomParams[begId] && atomParams[endId] && bOrder > 0) {
-      auto bl = ForceFields::UFF::Utils::calcBondRestLength(
-          bOrder, atomParams[begId], atomParams[endId]);
+    if (auto bl = lengthConstraints[bond->getIdx()]) {
+      accumData.bondLengths[bond->getIdx()] = bl.value();
+      mmat->setUpperBound(begId, endId, bl.value() + DIST12_DELTA);
+      mmat->setLowerBound(begId, endId, bl.value() - DIST12_DELTA);
+    } else if (atomParams[begId] && atomParams[endId] && bOrder > 0) {
+      if (lengthConstraints[bond->getIdx()]) {
+      }
+      auto bl = lengthConstraints[bond->getIdx()].value_or(
+          ForceFields::UFF::Utils::calcBondRestLength(bOrder, atomParams[begId],
+                                                      atomParams[endId]));
 
       double extraSquish = 0.0;
       if (squishAtoms[begId] && squishAtoms[endId]) {
@@ -297,8 +305,8 @@ void set12Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
       auto lowerScale = 0.9;
       if (auto bt = bond->getBondType();
           bt > Bond::BondType::AROMATIC || bt < Bond::BondType::SINGLE) {
-        // weird bond types, use the average of the van der Waals radii instead
-        // and allow a lot more flex
+        // weird bond types, use the average of the van der Waals radii
+        // instead and allow a lot more flex
         vw1 = PeriodicTable::getTable()->getRvdw(
             mol.getAtomWithIdx(begId)->getAtomicNum());
         vw2 = PeriodicTable::getTable()->getRvdw(
@@ -475,7 +483,8 @@ auto lessVector = [](const auto &v1, const auto &v2) {
 };
 
 void set13Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
-                 ComputedData &accumData) {
+                 ComputedData &accumData,
+                 const BondAngleInfo &angleConstraints) {
   auto npt = mmat->numRows();
   CHECK_INVARIANT(npt == mol.getNumAtoms(), "Wrong size metric matrix");
   CHECK_INVARIANT(accumData.bondAngles->numRows() == mol.getNumBonds(),
@@ -533,8 +542,13 @@ void set13Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
         // systems we may be covering the same 13 (ring) paths multiple
         // times and unnecessarily increasing the angleTaken at the central
         // atom.
-        angle = _getRingAngle(mol.getAtomWithIdx(aid2), rSize);
-
+        if (auto angleIt = angleConstraints.find(
+                getUnifiedId(bid1, bid2, mol.getNumBonds()));
+            angleIt != angleConstraints.cend()) {
+          angle = angleIt->second;
+        } else {
+          angle = _getRingAngle(mol.getAtomWithIdx(aid2), rSize);
+        }
         const auto pid = getUnifiedId(aid1, aid3, mol.getNumAtoms());
 
         if (!accumData.visitedBound(pid, DistType::DIST12)) {
@@ -580,41 +594,47 @@ void set13Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
           const auto bnd2 = mol[*beg2];
           bid2 = bnd2->getIdx();
           aid3 = bnd2->getOtherAtomIdx(aid2);
-          if (accumData.bondAngles->getVal(bid1, bid2) < 0.0) {
-            // if we haven't dealt with these two bonds before
+          if (auto angleIt = angleConstraints.find(
+                  getUnifiedId(bid1, bid2, mol.getNumBonds()));
+              angleIt != angleConstraints.cend()) {
+            angle = angleIt->second;
+          } else {
+            if (accumData.bondAngles->getVal(bid1, bid2) < 0.0) {
+              // if we haven't dealt with these two bonds before
 
-            // if we have a sp2 atom things are planar - we simply divide
-            // the remaining angle among the remaining 13 configurations
-            // (and there should only be one)
-            if (ahyb == Atom::SP2) {
-              angle = (2 * M_PI - angleTaken[aid2]) / (n13 - visited[aid2]);
-            } else if (ahyb == Atom::SP3) {
-              // in the case of sp3 we will use the tetrahedral angle mostly
-              // - but with some special cases
-              angle = 109.5 * M_PI / 180;
-              // we will special-case a little bit here for 3, 4 members
-              // ring atoms that are sp3 hybridized beyond that the angle
-              // reasonably close to the tetrahedral angle
-              if (rinfo->isAtomInRingOfSize(aid2, 3)) {
-                angle = 116.0 * M_PI / 180;
-              } else if (rinfo->isAtomInRingOfSize(aid2, 4)) {
-                angle = 112.0 * M_PI / 180;
-              }
-            } else if (Chirality::hasNonTetrahedralStereo(atom)) {
-              angle = Chirality::getIdealAngleBetweenLigands(
-                          atom, mol.getAtomWithIdx(aid1),
-                          mol.getAtomWithIdx(aid3)) *
-                      M_PI / 180;
-            } else {
-              // other options we will simply based things on the number of
-              // substituent
-              if (deg == 5) {
-                angle = 105.0 * M_PI / 180;
-              } else if (deg == 6) {
-                angle = 135.0 * M_PI / 180;
+              // if we have a sp2 atom things are planar - we simply divide
+              // the remaining angle among the remaining 13 configurations
+              // (and there should only be one)
+              if (ahyb == Atom::SP2) {
+                angle = (2 * M_PI - angleTaken[aid2]) / (n13 - visited[aid2]);
+              } else if (ahyb == Atom::SP3) {
+                // in the case of sp3 we will use the tetrahedral angle mostly
+                // - but with some special cases
+                angle = 109.5 * M_PI / 180;
+                // we will special-case a little bit here for 3, 4 members
+                // ring atoms that are sp3 hybridized beyond that the angle
+                // reasonably close to the tetrahedral angle
+                if (rinfo->isAtomInRingOfSize(aid2, 3)) {
+                  angle = 116.0 * M_PI / 180;
+                } else if (rinfo->isAtomInRingOfSize(aid2, 4)) {
+                  angle = 112.0 * M_PI / 180;
+                }
+              } else if (Chirality::hasNonTetrahedralStereo(atom)) {
+                angle = Chirality::getIdealAngleBetweenLigands(
+                            atom, mol.getAtomWithIdx(aid1),
+                            mol.getAtomWithIdx(aid3)) *
+                        M_PI / 180;
               } else {
-                angle = 120.0 * M_PI / 180;  // FIX: this default is probably
-                                             // not the best we can do here
+                // other options we will simply based things on the number of
+                // substituent
+                if (deg == 5) {
+                  angle = 105.0 * M_PI / 180;
+                } else if (deg == 6) {
+                  angle = 135.0 * M_PI / 180;
+                } else {
+                  angle = 120.0 * M_PI / 180;  // FIX: this default is probably
+                                               // not the best we can do here
+                }
               }
             }
 
@@ -646,34 +666,40 @@ void set13Bounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
           const auto bnd2 = mol[*beg2];
           bid2 = bnd2->getIdx();
           aid3 = bnd2->getOtherAtomIdx(aid2);
-          if (Chirality::hasNonTetrahedralStereo(atom)) {
-            angle =
-                Chirality::getIdealAngleBetweenLigands(
-                    atom, mol.getAtomWithIdx(aid1), mol.getAtomWithIdx(aid3)) *
-                M_PI / 180;
-
+          if (auto angleIt = angleConstraints.find(
+                  getUnifiedId(bid1, bid2, mol.getNumBonds()));
+              angleIt != angleConstraints.cend()) {
+            angle = angleIt->second;
           } else {
-            if (ahyb == Atom::SP) {
-              angle = M_PI;
-            } else if (ahyb == Atom::SP2) {
-              angle = 2 * M_PI / 3;
-            } else if (ahyb == Atom::SP3) {
-              angle = 109.5 * M_PI / 180;
-            } else if (Chirality::hasNonTetrahedralStereo(atom)) {
+            if (Chirality::hasNonTetrahedralStereo(atom)) {
               angle = Chirality::getIdealAngleBetweenLigands(
                           atom, mol.getAtomWithIdx(aid1),
                           mol.getAtomWithIdx(aid3)) *
                       M_PI / 180;
-            } else if (ahyb == Atom::SP3D) {
-              // FIX: this and the remaining two hybridization states below
-              // should probably be special cased. These defaults below are
-              // probably not the best we can do particularly when stereo
-              // chemistry is know
-              angle = 105.0 * M_PI / 180;
-            } else if (ahyb == Atom::SP3D2) {
-              angle = 135.0 * M_PI / 180;
+
             } else {
-              angle = 120.0 * M_PI / 180;
+              if (ahyb == Atom::SP) {
+                angle = M_PI;
+              } else if (ahyb == Atom::SP2) {
+                angle = 2 * M_PI / 3;
+              } else if (ahyb == Atom::SP3) {
+                angle = 109.5 * M_PI / 180;
+              } else if (Chirality::hasNonTetrahedralStereo(atom)) {
+                angle = Chirality::getIdealAngleBetweenLigands(
+                            atom, mol.getAtomWithIdx(aid1),
+                            mol.getAtomWithIdx(aid3)) *
+                        M_PI / 180;
+              } else if (ahyb == Atom::SP3D) {
+                // FIX: this and the remaining two hybridization states below
+                // should probably be special cased. These defaults below are
+                // probably not the best we can do particularly when stereo
+                // chemistry is know
+                angle = 105.0 * M_PI / 180;
+              } else if (ahyb == Atom::SP3D2) {
+                angle = 135.0 * M_PI / 180;
+              } else {
+                angle = 120.0 * M_PI / 180;
+              }
             }
           }
           const unsigned int pid =
@@ -1596,9 +1622,11 @@ void setTopolBounds(const ROMol &mol, DistGeom::BoundsMatPtr mmat,
   double *distMatrix = nullptr;
   distMatrix = MolOps::getDistanceMat(mol);
 
-  set12Bounds(mol, mmat, accumData);
+  set12Bounds(mol, mmat, accumData,
+              params.internalCoordinateConstraints->lengths);
   if (set13bounds) {
-    set13Bounds(mol, mmat, accumData);
+    set13Bounds(mol, mmat, accumData,
+                params.internalCoordinateConstraints->angles);
 
     if (set14bounds) {
       set14Bounds(mol, mmat, accumData, distMatrix,

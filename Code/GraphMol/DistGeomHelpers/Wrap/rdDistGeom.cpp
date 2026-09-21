@@ -8,6 +8,10 @@
 //  of the RDKit source tree.
 //
 #include <RDBoost/python.h>
+#include <boost/python/dict.hpp>
+#include <boost/python/extract.hpp>
+#include <boost/python/tuple.hpp>
+#include <memory>
 #define PY_ARRAY_UNIQUE_SYMBOL rdDistGeom_array_API
 #include <RDBoost/import_array.h>
 #include "numpy/arrayobject.h"
@@ -65,6 +69,37 @@ struct PyEmbedParameters
       unsigned int a = python::extract<unsigned int>(id[0]);
       unsigned int b = python::extract<unsigned int>(id[1]);
       (*CPCI)[std::make_pair(a, b)] = python::extract<double>(CPCIdict[id]);
+    }
+  }
+
+  void setConstraintsRad(const python::dict &bondLengths,
+                         const python::dict &bondAnglesRad,
+                         const RDKit::ROMol &mol) {
+    // maybe print warning if constraints get overwritten?
+    internalCoordinateConstraints =
+        std::make_shared<RDKit::DGeomHelpers::InternalCoordinates>(
+            mol.getNumBonds());
+
+    python::list ks = bondLengths.keys();
+    unsigned int nKeys = python::len(ks);
+
+    for (unsigned int i = 0; i < nKeys; ++i) {
+      unsigned int bondId = python::extract<unsigned int>(ks[i]);
+      internalCoordinateConstraints->lengths[bondId] =
+          python::extract<double>(bondLengths[bondId]);
+    }
+
+    ks = bondAnglesRad.keys();
+    nKeys = python::len(ks);
+
+    for (unsigned int i = 0; i < nKeys; ++i) {
+      python::tuple bondIds = python::extract<python::tuple>(ks[i]);
+      unsigned int bndId1 = python::extract<unsigned int>(bondIds[0]);
+      unsigned int bndId2 = python::extract<unsigned int>(bondIds[1]);
+      auto pid =
+          RDKit::DGeomHelpers::getUnifiedId(bndId1, bndId2, mol.getNumBonds());
+      internalCoordinateConstraints->angles[pid] =
+          python::extract<double>(bondAnglesRad[bondIds]);
     }
   }
 

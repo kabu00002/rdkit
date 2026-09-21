@@ -9,6 +9,7 @@
 //  of the RDKit source tree.
 //
 #include <RDGeneral/export.h>
+#include <optional>
 #ifndef RD_Z_MATRIX_BUILDER_H
 #define RD_Z_MATRIX_BUILDER_H
 
@@ -22,7 +23,7 @@ namespace DGeomHelpers {
 using TorsionInfo =
     boost::unordered_flat_map<std::size_t, DistGeom::TorsionCandidates>;
 using BondAngleInfo = boost::unordered_flat_map<std::size_t, double>;
-using BondLengthInfo = std::vector<double>;
+using BondLengthInfo = std::vector<std::optional<double>>;
 
 //! A struct to store internal coordinates by unified ids through the ids from
 //! the invovled bonds

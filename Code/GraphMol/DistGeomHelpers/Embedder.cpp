@@ -1781,6 +1781,12 @@ void EmbedMultipleConfs(ROMol &mol, INT_VECT &res, unsigned int numConfs,
     res.clear();
     mol.clearConformers();
   }
+
+  if (params.internalCoordinateConstraints == nullptr) {
+    params.internalCoordinateConstraints =
+        std::make_shared<DGeomHelpers::InternalCoordinates>(mol.getNumBonds());
+  }
+
   std::vector<std::unique_ptr<Conformer>> confs;
   confs.reserve(numConfs);
   for (unsigned int i = 0; i < numConfs; ++i) {
