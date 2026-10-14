@@ -188,10 +188,53 @@ void addElement(const Atom *atom, const unsigned int precursorIdx,
   std::optional<DistGeom::ZMatrix::TorsionDependence> torsiondependence;
   if (tRef) {
     // this also means that we do not need a torsion reference
-    const double offset =
-        2 * M_PI /
-        static_cast<double>(
-            std::min(mol.getAtomWithIdx(precursorIdx)->getDegree(), 5u) - 1);
+    // inproper torsion
+    //                   (C) tRef
+    //          bnd2     / bnd3
+    // (A) ref1 ----- (B) precIdx
+    //                  \ bnd1
+    //                  (D)curIdx
+    const unsigned int bndIdx3 =
+        mol.getBondBetweenAtoms(tRef.value(), precursorIdx)->getIdx();
+
+    if (internalCoords.angles.find(static_cast<std::uint64_t>(
+            getUnifiedId(bndIdx3, bndIdx2, mol.getNumBonds()))) ==
+        internalCoords.angles.end()) {
+      BOOST_LOG(rdWarningLog)
+          << "Angle " << bndIdx3 << " " << bndIdx2 << " not found\n";
+    }
+
+    double angle_abc = internalCoords.angles.at(static_cast<std::uint64_t>(
+        getUnifiedId(bndIdx3, bndIdx2, mol.getNumBonds())));
+
+    if (internalCoords.angles.find(static_cast<std::uint64_t>(
+            getUnifiedId(bndIdx3, bndIdx1, mol.getNumBonds()))) ==
+        internalCoords.angles.end()) {
+      BOOST_LOG(rdWarningLog)
+          << "Angle " << bndIdx3 << " " << bndIdx1 << " not found\n";
+    }
+
+    double angle_dbc = internalCoords.angles.at(static_cast<std::uint64_t>(
+        getUnifiedId(bndIdx3, bndIdx1, mol.getNumBonds())));
+
+    if (RDKit::feq(angle_abc, M_PI, 1e-8)) {
+      // to avoid colinearity
+      angle_abc += 1e-6;
+    }
+
+    const double denominator = std::sin(angle_abc) * std::sin(ba);
+
+    CHECK_INVARIANT(
+        std::abs(denominator) > 1e-8,
+        "Cannot determine torsion offset from collinear references");
+
+    const double cosOffset =
+        std::clamp((std::cos(angle_dbc) - std::cos(angle_abc) * std::cos(ba)) /
+                       denominator,
+                   -1.0, 1.0);
+
+    const double offset = std::acos(cosOffset);
+
     torsiondependence = {offset, tRef.value()};
   } else if (ref2Opt) {  // only if a torsion reference exists (this does not
                          // hold for the 3rd element in the matrix therefore
