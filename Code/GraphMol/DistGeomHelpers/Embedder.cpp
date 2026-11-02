@@ -287,17 +287,17 @@ bool _centerInVolume(unsigned int idx0, unsigned int idx1, unsigned int idx2,
                      (*positions[idx3])[2]);
   RDGeom::Point3D p4((*positions[idx4])[0], (*positions[idx4])[1],
                      (*positions[idx4])[2]);
-  // RDGeom::Point3D centroid = (p1+p2+p3+p4)/4.;
+  RDGeom::Point3D centroid = (p1 + p2 + p3 + p4) / 4.;
   if (verbose) {
     std::cerr << _sameSide(p1, p2, p3, p4, p0, tol) << " "
               << _sameSide(p2, p3, p4, p1, p0, tol) << " "
               << _sameSide(p3, p4, p1, p2, p0, tol) << " "
               << _sameSide(p4, p1, p2, p3, p0, tol) << std::endl;
   }
-  bool res = _sameSide(p1, p2, p3, p4, p0, tol) &&
-             _sameSide(p2, p3, p4, p1, p0, tol) &&
-             _sameSide(p3, p4, p1, p2, p0, tol) &&
-             _sameSide(p4, p1, p2, p3, p0, tol);
+  bool res = _sameSide(p1, p2, p3, p4, centroid, tol) &&
+             _sameSide(p2, p3, p4, p1, centroid, tol) &&
+             _sameSide(p3, p4, p1, p2, centroid, tol) &&
+             _sameSide(p4, p1, p2, p3, centroid, tol);
   return res;
 }
 
@@ -1552,8 +1552,8 @@ void findChiralSets(const ROMol &mol, DistGeom::VECT_CHIRALSET &chiralCenters,
           }
         }
       }  // if block -chirality check
-    }    // if block - heavy atom check
-  }      // for loop over atoms
+    }  // if block - heavy atom check
+  }  // for loop over atoms
 
   // now do atropisomers
   for (const auto &bond : mol.bonds()) {
